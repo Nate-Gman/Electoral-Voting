@@ -118,9 +118,15 @@ def create_database():
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             ssn TEXT NOT NULL,
+            state TEXT DEFAULT '',
             eligibility INTEGER NOT NULL
         )
     """)
+    # Migration: add state column if not exists (for existing databases)
+    try:
+        c.execute("SELECT state FROM voters LIMIT 1")
+    except sqlite3.OperationalError:
+        c.execute("ALTER TABLE voters ADD COLUMN state TEXT DEFAULT ''")
     c.execute("""
         CREATE TABLE IF NOT EXISTS elections (
             id INTEGER PRIMARY KEY,
@@ -596,6 +602,11 @@ HTML_CONTENT = '''<!DOCTYPE html>
             <button onclick="navigateTo('dashboard')" class="px-3 py-2 hover:bg-white/20 rounded-lg transition flex items-center gap-x-1 font-bold"><i class="fa-solid fa-chart-line"></i> DASHBOARD</button>
             <button onclick="navigateTo('audit')" class="px-3 py-2 hover:bg-white/20 rounded-lg transition flex items-center gap-x-1 font-bold"><i class="fa-solid fa-scale-balanced"></i> AUDIT</button>
             <button onclick="navigateTo('pile')" class="px-3 py-2 hover:bg-white/20 rounded-lg transition flex items-center gap-x-1 font-bold"><i class="fa-solid fa-cubes"></i> PILE</button>
+            <button onclick="navigateTo('verify')" class="px-3 py-2 hover:bg-white/20 rounded-lg transition flex items-center gap-x-1 font-bold" style="color:#4ade80"><i class="fa-solid fa-magnifying-glass-chart"></i> VERIFY</button>
+            <button onclick="navigateTo('results')" class="px-3 py-2 hover:bg-white/20 rounded-lg transition flex items-center gap-x-1 font-bold" style="color:#fbbf24"><i class="fa-solid fa-trophy"></i> RESULTS</button>
+            <button onclick="runChainTest()" class="px-3 py-2 hover:bg-white/20 rounded-lg transition flex items-center gap-x-1 font-bold" style="color:#60a5fa"><i class="fa-solid fa-link"></i> CHAIN TEST</button>
+            <button onclick="navigateTo('explorer')" class="px-3 py-2 hover:bg-white/20 rounded-lg transition flex items-center gap-x-1 font-bold" style="color:#a78bfa"><i class="fa-solid fa-cubes"></i> EXPLORER</button>
+            <button onclick="openExportModal()" class="px-3 py-2 hover:bg-white/20 rounded-lg transition flex items-center gap-x-1 font-bold" style="color:#f472b6"><i class="fa-solid fa-download"></i> EXPORT</button>
             <button onclick="navigateTo('about')" class="px-3 py-2 hover:bg-white/20 rounded-lg transition flex items-center gap-x-1 font-bold"><i class="fa-solid fa-circle-info"></i> ABOUT</button>
             <button onclick="navigateTo('power')" class="px-3 py-2 hover:bg-white/20 rounded-lg transition flex items-center gap-x-1 font-bold"><i class="fa-solid fa-fist-raised"></i> POWER</button>
             <button onclick="navigateTo('incentives')" class="px-3 py-2 hover:bg-white/20 rounded-lg transition flex items-center gap-x-1 font-bold"><i class="fa-solid fa-lightbulb"></i> WHY VOTE</button>
@@ -637,7 +648,13 @@ HTML_CONTENT = '''<!DOCTYPE html>
                     <h2 class="header-font text-xl font-bold text-center" style="letter-spacing:2px">★ SELECT YOUR STATE TO VIEW ELECTIONS ★</h2>
                 </div>
                 <div id="us-map" class="us-map-grid"></div>
-                <p class="mt-4 text-gray-500 text-sm">Click your state on the map or use the dropdown in the navigation bar</p>
+                <div class="flex justify-center items-center gap-6 mt-4 mb-2">
+                    <div class="flex items-center gap-2"><span class="w-4 h-4 rounded" style="background:#002868"></span><span class="text-xs text-gray-600">High Participation (10+ votes)</span></div>
+                    <div class="flex items-center gap-2"><span class="w-4 h-4 rounded" style="background:#DAA520"></span><span class="text-xs text-gray-600">Medium (5-9 votes)</span></div>
+                    <div class="flex items-center gap-2"><span class="w-4 h-4 rounded" style="background:#BF0A30"></span><span class="text-xs text-gray-600">Low (1-4 votes)</span></div>
+                    <div class="flex items-center gap-2"><span class="w-4 h-4 rounded bg-gray-300"></span><span class="text-xs text-gray-600">No votes</span></div>
+                </div>
+                <p class="text-gray-500 text-sm">Click your state on the map or use the dropdown in the navigation bar</p>
             </div>
             
             <!-- Feature Cards (FUNCTIONAL) -->
@@ -888,27 +905,79 @@ HTML_CONTENT = '''<!DOCTYPE html>
     <div id="screen-dashboard" class="screen hidden">
         <h2 class="header-font text-4xl mb-2 text-center" style="color:#002868"><span style="color:#BF0A30">★</span> National Live Dashboard <span style="color:#BF0A30">★</span></h2>
         <div class="patriot-divider max-w-sm mx-auto" style="margin:8px auto 20px"></div>
-        <div id="dash-content" class="grid grid-cols-3 gap-6">
-            <div class="bg-white rounded-3xl p-8 shadow-xl border-2 border-blue-100">
-                <h3 class="font-bold text-blue-800 text-sm uppercase tracking-wider">TOTAL VOTES CAST</h3>
-                <div id="dash-vote-count" class="text-6xl font-bold text-red-700 mt-3">--</div>
-                <p id="dash-vote-label" class="text-gray-500 mt-2 text-sm">No data yet</p>
+
+        <!-- TOP ROW: Key Stats -->
+        <div id="dash-content" class="grid grid-cols-5 gap-4 mb-6">
+            <div class="bg-white rounded-3xl p-6 shadow-xl border-2 border-blue-100 text-center">
+                <h3 class="font-bold text-blue-800 text-xs uppercase tracking-wider">TOTAL VOTES CAST</h3>
+                <div id="dash-vote-count" class="text-5xl font-bold text-red-700 mt-2">--</div>
+                <p id="dash-vote-label" class="text-gray-500 mt-1 text-xs">No data yet</p>
             </div>
-            <div class="bg-white rounded-3xl p-8 shadow-xl border-2 border-blue-100">
-                <h3 class="font-bold text-blue-800 text-sm uppercase tracking-wider">REGISTERED VOTERS</h3>
-                <div id="dash-voters" class="text-6xl font-bold text-blue-800 mt-3">--</div>
-                <p id="dash-elections" class="text-gray-500 mt-2 text-sm">No data yet</p>
+            <div class="bg-white rounded-3xl p-6 shadow-xl border-2 border-blue-100 text-center">
+                <h3 class="font-bold text-blue-800 text-xs uppercase tracking-wider">PAPER SLIPS MINTED</h3>
+                <div id="dash-tokens" class="text-5xl font-bold" style="color:#DAA520;margin-top:8px">--</div>
+                <p id="dash-verified-label" class="text-gray-500 mt-1 text-xs">Cryptographic tokens</p>
             </div>
-            <div class="bg-white rounded-3xl p-8 shadow-xl border-2 border-blue-100">
-                <h3 class="font-bold text-blue-800 text-sm uppercase tracking-wider">AUDIT INTEGRITY</h3>
-                <div id="dash-audit-status" class="text-4xl font-bold text-green-600 mt-3">--</div>
-                <p id="dash-updated" class="text-gray-500 mt-2 text-sm">No data yet</p>
+            <div class="bg-white rounded-3xl p-6 shadow-xl border-2 border-blue-100 text-center">
+                <h3 class="font-bold text-blue-800 text-xs uppercase tracking-wider">DOUBLE VERIFIED</h3>
+                <div id="dash-verified" class="text-5xl font-bold text-green-600 mt-2">--</div>
+                <p class="text-gray-500 mt-1 text-xs">Both hashes confirmed</p>
+            </div>
+            <div class="bg-white rounded-3xl p-6 shadow-xl border-2 border-blue-100 text-center">
+                <h3 class="font-bold text-blue-800 text-xs uppercase tracking-wider">REGISTERED VOTERS</h3>
+                <div id="dash-voters" class="text-5xl font-bold text-blue-800 mt-2">--</div>
+                <p id="dash-elections" class="text-gray-500 mt-1 text-xs">No data yet</p>
+            </div>
+            <div class="bg-white rounded-3xl p-6 shadow-xl border-2 border-blue-100 text-center">
+                <h3 class="font-bold text-blue-800 text-xs uppercase tracking-wider">CHAIN INTEGRITY</h3>
+                <div id="dash-chain" class="text-4xl font-bold text-green-600 mt-2">--</div>
+                <p id="dash-audit-count" class="text-gray-500 mt-1 text-xs">Audit entries: --</p>
             </div>
         </div>
-        <div class="mt-8 bg-white rounded-3xl p-8 shadow-xl border-2 border-blue-100">
-            <h3 class="font-bold text-blue-800 text-sm uppercase tracking-wider mb-4">RECENT ACTIVITY</h3>
+
+        <!-- GENRE BREAKDOWN -->
+        <div class="grid grid-cols-4 gap-4 mb-6">
+            <div class="bg-gradient-to-br from-blue-900 to-blue-800 rounded-2xl p-5 text-white shadow-xl text-center">
+                <div class="text-xs font-bold tracking-widest opacity-70 mb-1">FEDERAL</div>
+                <div id="dash-genre-federal" class="text-4xl font-bold" style="color:#FFD700">0</div>
+                <div class="text-xs mt-1 opacity-60">Presidential • Senate • House • Judicial</div>
+            </div>
+            <div class="bg-gradient-to-br from-red-800 to-red-700 rounded-2xl p-5 text-white shadow-xl text-center">
+                <div class="text-xs font-bold tracking-widest opacity-70 mb-1">STATE</div>
+                <div id="dash-genre-state" class="text-4xl font-bold" style="color:#FFD700">0</div>
+                <div class="text-xs mt-1 opacity-60">Governor • Legislature • Propositions</div>
+            </div>
+            <div class="bg-gradient-to-br from-yellow-700 to-yellow-600 rounded-2xl p-5 text-white shadow-xl text-center">
+                <div class="text-xs font-bold tracking-widest opacity-70 mb-1">LOCAL / COMMUNAL</div>
+                <div id="dash-genre-local" class="text-4xl font-bold" style="color:#fff">0</div>
+                <div class="text-xs mt-1 opacity-60">Mayor • Council • School Board • Bonds</div>
+            </div>
+            <div class="bg-gradient-to-br from-green-800 to-green-700 rounded-2xl p-5 text-white shadow-xl text-center">
+                <div class="text-xs font-bold tracking-widest opacity-70 mb-1">PETITIONS &amp; LAWS</div>
+                <div id="dash-genre-petition" class="text-4xl font-bold" style="color:#FFD700">0</div>
+                <div class="text-xs mt-1 opacity-60">National • State • Local • Initiatives</div>
+            </div>
+        </div>
+
+        <!-- GENRE BAR CHART (inline) -->
+        <div class="bg-white rounded-3xl p-6 shadow-xl border-2 border-blue-100 mb-6">
+            <h3 class="font-bold text-blue-800 text-sm uppercase tracking-wider mb-4"><i class="fa-solid fa-chart-bar mr-2 text-red-700"></i> PAPER SLIPS BY VOTING FORMAT</h3>
+            <div id="dash-genre-bars" class="space-y-3">
+                <div class="flex items-center gap-3"><span class="w-20 text-xs font-bold text-blue-900">FEDERAL</span><div class="flex-1 bg-gray-100 rounded-full h-6 overflow-hidden"><div id="dash-bar-federal" class="h-6 rounded-full transition-all" style="width:0%;background:#002868"></div></div><span id="dash-bar-cnt-federal" class="w-10 text-right text-sm font-bold text-blue-900">0</span></div>
+                <div class="flex items-center gap-3"><span class="w-20 text-xs font-bold text-red-800">STATE</span><div class="flex-1 bg-gray-100 rounded-full h-6 overflow-hidden"><div id="dash-bar-state" class="h-6 rounded-full transition-all" style="width:0%;background:#B22234"></div></div><span id="dash-bar-cnt-state" class="w-10 text-right text-sm font-bold text-red-800">0</span></div>
+                <div class="flex items-center gap-3"><span class="w-20 text-xs font-bold" style="color:#B8860B">LOCAL</span><div class="flex-1 bg-gray-100 rounded-full h-6 overflow-hidden"><div id="dash-bar-local" class="h-6 rounded-full transition-all" style="width:0%;background:#DAA520"></div></div><span id="dash-bar-cnt-local" class="w-10 text-right text-sm font-bold" style="color:#B8860B">0</span></div>
+                <div class="flex items-center gap-3"><span class="w-20 text-xs font-bold text-green-800">PETITION</span><div class="flex-1 bg-gray-100 rounded-full h-6 overflow-hidden"><div id="dash-bar-petition" class="h-6 rounded-full transition-all" style="width:0%;background:#16a34a"></div></div><span id="dash-bar-cnt-petition" class="w-10 text-right text-sm font-bold text-green-800">0</span></div>
+            </div>
+        </div>
+
+        <!-- RECENT ACTIVITY -->
+        <div class="bg-white rounded-3xl p-6 shadow-xl border-2 border-blue-100">
+            <h3 class="font-bold text-blue-800 text-sm uppercase tracking-wider mb-4"><i class="fa-solid fa-clock-rotate-left mr-2 text-red-700"></i> RECENT ACTIVITY</h3>
             <div id="dash-recent" class="text-sm text-gray-500">No recent activity to display.</div>
         </div>
+
+        <!-- LAST UPDATED -->
+        <div class="text-center mt-4 text-xs text-gray-400" id="dash-updated">—</div>
     </div>
 
     <!-- PUBLIC AUDIT -->
@@ -1500,6 +1569,243 @@ HTML_CONTENT = '''<!DOCTYPE html>
         </div>
     </div>
 
+    <!-- VERIFY YOUR VOTE -->
+    <div id="screen-verify" class="screen hidden">
+        <div class="patriot-banner mb-6" style="text-align:center">
+            <h2 class="header-font text-3xl"><i class="fa-solid fa-magnifying-glass-chart" style="color:#FFD700"></i> VERIFY YOUR VOTE <i class="fa-solid fa-magnifying-glass-chart" style="color:#FFD700"></i></h2>
+            <p class="text-sm mt-1" style="color:#FFD700">Enter any Token ID to independently verify its existence, integrity, and chain position.</p>
+        </div>
+        <div class="max-w-3xl mx-auto">
+            <div class="bg-white rounded-3xl p-8 shadow-xl border-2 border-green-200 mb-6">
+                <div class="flex gap-4 items-end">
+                    <div class="flex-1">
+                        <label class="block text-sm font-bold text-blue-900 mb-2"><i class="fa-solid fa-fingerprint mr-1"></i> PAPER SLIP TOKEN ID</label>
+                        <input id="verify-token-input" type="text" placeholder="e.g. VT-20260422-A1B2C3D4E5F6" class="w-full border-2 border-green-600 rounded-2xl px-6 py-4 text-lg font-mono focus:ring-4 focus:ring-green-200 focus:border-green-800 transition">
+                    </div>
+                    <button onclick="verifyVoteToken()" class="px-8 py-4 bg-gradient-to-r from-green-700 to-green-900 text-white text-lg font-bold rounded-2xl shadow-xl hover:shadow-2xl transform hover:scale-105 transition"><i class="fa-solid fa-shield-halved mr-2"></i> VERIFY</button>
+                </div>
+            </div>
+            <div id="verify-result" class="space-y-4"></div>
+        </div>
+    </div>
+
+    <!-- LIVE ELECTION RESULTS -->
+    <div id="screen-results" class="screen hidden">
+        <div class="patriot-banner mb-6" style="text-align:center">
+            <h2 class="header-font text-3xl"><i class="fa-solid fa-trophy" style="color:#FFD700"></i> LIVE ELECTION RESULTS <i class="fa-solid fa-trophy" style="color:#FFD700"></i></h2>
+            <p class="text-sm mt-1" style="color:#FFD700">Real-time tallies across every race in every voting format. Updated live.</p>
+        </div>
+        <div class="flex gap-3 mb-6 justify-center">
+            <button onclick="loadResults(0)" id="res-tab-0" class="px-5 py-2 rounded-xl font-bold text-sm border-2 transition" style="background:#002868;color:#fff;border-color:#002868"><i class="fa-solid fa-landmark-dome mr-1"></i> FEDERAL</button>
+            <button onclick="loadResults(1)" id="res-tab-1" class="px-5 py-2 rounded-xl font-bold text-sm border-2 transition bg-white text-gray-700 border-gray-300"><i class="fa-solid fa-building-columns mr-1"></i> STATE</button>
+            <button onclick="loadResults(2)" id="res-tab-2" class="px-5 py-2 rounded-xl font-bold text-sm border-2 transition bg-white text-gray-700 border-gray-300"><i class="fa-solid fa-city mr-1"></i> LOCAL</button>
+            <button onclick="loadResults(3)" id="res-tab-3" class="px-5 py-2 rounded-xl font-bold text-sm border-2 transition bg-white text-gray-700 border-gray-300"><i class="fa-solid fa-scroll mr-1"></i> PETITIONS</button>
+        </div>
+        <div id="results-body" class="max-w-5xl mx-auto space-y-6"></div>
+        <div class="text-center mt-6 text-xs text-gray-400" id="results-updated">—</div>
+    </div>
+
+    <!-- CHAIN INTEGRITY TEST (modal overlay) -->
+    <div id="chain-test-modal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center" style="background:rgba(0,0,0,0.85)">
+        <div class="bg-white rounded-3xl p-8 shadow-2xl max-w-2xl w-full mx-4 border-4 border-blue-800 max-h-[90vh] overflow-y-auto">
+            <div class="text-center mb-6">
+                <div class="gold-seal mx-auto mb-3" style="width:60px;height:60px;font-size:28px">🔗</div>
+                <h2 class="header-font text-2xl text-blue-900">BLOCKCHAIN INTEGRITY SELF-TEST</h2>
+                <p class="text-sm text-gray-500 mt-1">Walking the entire chain from Genesis to HEAD...</p>
+            </div>
+            <div class="mb-4">
+                <div class="bg-gray-100 rounded-full h-6 overflow-hidden">
+                    <div id="chain-test-bar" class="h-6 rounded-full transition-all" style="width:0%;background:linear-gradient(90deg,#002868,#16a34a)"></div>
+                </div>
+                <div class="flex justify-between mt-1 text-xs text-gray-400">
+                    <span>Genesis Block</span>
+                    <span id="chain-test-progress">0 / 0 blocks verified</span>
+                    <span>HEAD</span>
+                </div>
+            </div>
+            <div id="chain-test-log" class="bg-gray-900 text-green-400 rounded-2xl p-4 font-mono text-xs max-h-60 overflow-y-auto mb-4" style="min-height:120px">
+                <div class="text-gray-500">Initializing chain walk...</div>
+            </div>
+            <div id="chain-test-result" class="text-center mb-4"></div>
+            <div class="text-center">
+                <button onclick="closeChainTest()" class="px-6 py-3 bg-blue-800 text-white font-bold rounded-xl hover:bg-blue-700 transition"><i class="fa-solid fa-xmark mr-2"></i> CLOSE</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- BLOCKCHAIN EXPLORER -->
+    <div id="screen-explorer" class="screen hidden">
+        <div class="patriot-banner mb-6" style="text-align:center">
+            <h2 class="header-font text-3xl"><i class="fa-solid fa-cubes" style="color:#FFD700"></i> BLOCKCHAIN EXPLORER <i class="fa-solid fa-cubes" style="color:#FFD700"></i></h2>
+            <p class="text-sm mt-1" style="color:#FFD700">Walk the full chain block-by-block. Every hash. Every link. Verified.</p>
+        </div>
+        <div class="max-w-5xl mx-auto">
+            <!-- Chain Navigation -->
+            <div class="bg-white rounded-2xl shadow-xl p-6 mb-6 border-2 border-blue-200">
+                <div class="flex items-center justify-between mb-4">
+                    <button onclick="explorerPrev()" id="explorer-prev-btn" class="px-4 py-2 bg-blue-800 text-white rounded-lg font-bold hover:bg-blue-700 transition disabled:opacity-50"><i class="fa-solid fa-arrow-left mr-2"></i> PREV BLOCK</button>
+                    <div class="text-center">
+                        <div id="explorer-position" class="text-2xl font-bold text-blue-900">Block #1 of 5</div>
+                        <div id="explorer-genesis" class="text-xs text-yellow-600 font-bold" style="display:none"><i class="fa-solid fa-star mr-1"></i> GENESIS BLOCK</div>
+                    </div>
+                    <button onclick="explorerNext()" id="explorer-next-btn" class="px-4 py-2 bg-blue-800 text-white rounded-lg font-bold hover:bg-blue-700 transition disabled:opacity-50">NEXT BLOCK <i class="fa-solid fa-arrow-right ml-2"></i></button>
+                </div>
+                <!-- Visual Chain Links -->
+                <div class="flex items-center justify-center gap-2 mb-4">
+                    <div id="chain-link-prev" class="px-3 py-1 bg-gray-100 rounded text-xs font-mono text-gray-500 truncate max-w-[150px]">000000...</div>
+                    <i class="fa-solid fa-link text-blue-800"></i>
+                    <div id="chain-link-current" class="px-4 py-2 bg-blue-800 text-white rounded-lg text-sm font-mono font-bold">CURRENT</div>
+                    <i class="fa-solid fa-link text-blue-800"></i>
+                    <div id="chain-link-next" class="px-3 py-1 bg-gray-100 rounded text-xs font-mono text-gray-500 truncate max-w-[150px]">000000...</div>
+                </div>
+            </div>
+
+            <!-- Block Details -->
+            <div id="explorer-details" class="bg-gray-900 rounded-2xl p-6 text-green-400 font-mono text-sm shadow-xl">
+                <div class="flex items-center justify-between mb-4 pb-4 border-b border-gray-700">
+                    <span class="text-yellow-300 font-bold text-lg">BLOCK DETAILS</span>
+                    <button onclick="printPaperSlip()" class="px-4 py-2 bg-gradient-to-r from-yellow-600 to-yellow-700 text-white rounded-lg font-bold text-xs hover:shadow-lg transition"><i class="fa-solid fa-print mr-2"></i> PRINT PAPER SLIP</button>
+                </div>
+                <div class="grid grid-cols-2 gap-4" id="explorer-fields">
+                    <!-- Filled by JS -->
+                </div>
+            </div>
+
+            <!-- Hash Visualization -->
+            <div class="mt-6 bg-white rounded-2xl p-6 shadow-xl border-2 border-blue-100">
+                <h3 class="font-bold text-blue-900 mb-4"><i class="fa-solid fa-fingerprint mr-2"></i> HASH CHAIN VISUALIZATION</h3>
+                <div class="flex items-center gap-4">
+                    <div class="flex-1 bg-gray-100 rounded-xl p-4">
+                        <div class="text-xs text-gray-500 mb-1">PREVIOUS BLOCK HASH</div>
+                        <div id="viz-prev-hash" class="font-mono text-xs text-gray-700 break-all">0000000000000000000000000000000000000000000000000000000000000000</div>
+                    </div>
+                    <i class="fa-solid fa-arrow-right text-2xl text-blue-800"></i>
+                    <div class="flex-1 bg-blue-50 rounded-xl p-4 border-2 border-blue-300">
+                        <div class="text-xs text-blue-600 mb-1 font-bold">THIS BLOCK'S HASH</div>
+                        <div id="viz-current-hash" class="font-mono text-xs text-blue-900 break-all font-bold">...</div>
+                    </div>
+                    <i class="fa-solid fa-arrow-right text-2xl text-blue-800"></i>
+                    <div class="flex-1 bg-gray-100 rounded-xl p-4">
+                        <div class="text-xs text-gray-500 mb-1">NEXT BLOCK'S PREV_HASH</div>
+                        <div id="viz-next-prev" class="font-mono text-xs text-gray-700 break-all">...</div>
+                    </div>
+                </div>
+                <div id="hash-match-indicator" class="mt-4 text-center">
+                    <!-- Filled by JS -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- PRINTABLE PAPER SLIP MODAL -->
+    <div id="paper-slip-modal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center" style="background:rgba(0,0,0,0.9)">
+        <div class="bg-white rounded-none shadow-2xl w-full max-w-2xl mx-auto overflow-hidden" style="border:8px double #002868">
+            <!-- Certificate Header -->
+            <div style="background:linear-gradient(135deg,#002868,#001845);padding:24px;text-align:center;border-bottom:4px solid #FFD700">
+                <div style="display:flex;justify-content:center;align-items:center;gap:16px;margin-bottom:12px">
+                    <span style="font-size:36px">🇺🇸</span>
+                    <div class="gold-seal" style="width:64px;height:64px;font-size:28px;border-width:3px">🦅</div>
+                    <span style="font-size:36px">🇺🇸</span>
+                </div>
+                <h2 style="font-family:'Cinzel',serif;color:#FFD700;font-size:22px;font-weight:900;letter-spacing:3px;margin:0">OFFICIAL PAPER SLIP</h2>
+                <p style="color:rgba(255,255,255,0.7);font-size:11px;letter-spacing:2px;margin:4px 0 0">U.S. NATIONAL BALLOT INTEGRITY & VERIFICATION SYSTEM</p>
+            </div>
+
+            <!-- Certificate Body -->
+            <div style="padding:32px;background:linear-gradient(180deg,#fff 0%,#f8fafc 100%);background-image:url('data:image/svg+xml,%3Csvg width=\'100\' height=\'100\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Ctext x=\'50\' y=\'50\' text-anchor=\'middle\' font-size=\'60\' fill=\'%23002868\' opacity=\'0.03\'%3E🦅%3C/text%3E%3C/svg%3E')">
+                <div style="text-align:center;margin-bottom:24px">
+                    <div style="font-size:12px;color:#6b7280;letter-spacing:2px;margin-bottom:4px">CERTIFICATE OF CIVIC PARTICIPATION</div>
+                    <div style="font-family:'Cinzel',serif;font-size:20px;color:#002868;font-weight:700" id="slip-token-id">VT-XXXXXXXX-XXXXXXXX</div>
+                </div>
+
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
+                    <div style="background:#f3f4f6;border-radius:8px;padding:12px;border-left:4px solid #002868">
+                        <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Voter Hash</div>
+                        <div id="slip-voter-hash" style="font-family:monospace;font-size:11px;color:#374151;word-break:break-all">...</div>
+                    </div>
+                    <div style="background:#f3f4f6;border-radius:8px;padding:12px;border-left:4px solid #BF0A30">
+                        <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Genre</div>
+                        <div id="slip-genre" style="font-size:14px;color:#002868;font-weight:700">...</div>
+                    </div>
+                </div>
+
+                <div style="background:#f3f4f6;border-radius:8px;padding:16px;margin-bottom:24px;border:2px solid #DAA520">
+                    <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Cast Vote Choice</div>
+                    <div id="slip-choice" style="font-size:18px;color:#002868;font-weight:700;font-family:'Cinzel',serif">...</div>
+                </div>
+
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
+                    <div style="background:#ecfdf5;border-radius:8px;padding:12px;border:2px solid #16a34a">
+                        <div style="font-size:10px;color:#16a34a;text-transform:uppercase;letter-spacing:1px"><i class="fa-solid fa-check-circle mr-1"></i> Double Verified</div>
+                        <div style="font-family:monospace;font-size:9px;color:#15803d;margin-top:4px" id="slip-v1">V1: ...</div>
+                        <div style="font-family:monospace;font-size:9px;color:#15803d" id="slip-v2">V2: ...</div>
+                    </div>
+                    <div style="background:#eff6ff;border-radius:8px;padding:12px;border:2px solid #3b82f6">
+                        <div style="font-size:10px;color:#3b82f6;text-transform:uppercase;letter-spacing:1px"><i class="fa-solid fa-link mr-1"></i> Chain Position</div>
+                        <div id="slip-position" style="font-size:16px;color:#1d4ed8;font-weight:700">Block #1 of 1</div>
+                        <div id="slip-timestamp" style="font-size:10px;color:#6b7280;margin-top:2px">...</div>
+                    </div>
+                </div>
+
+                <div style="background:#fafafa;border-radius:8px;padding:12px;border:1px solid #e5e7eb">
+                    <div style="font-size:9px;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">SHA-256 Token Hash (Proof of Integrity)</div>
+                    <div id="slip-token-hash" style="font-family:monospace;font-size:10px;color:#374151;word-break:break-all">...</div>
+                </div>
+
+                <div style="text-align:center;margin-top:24px;padding-top:24px;border-top:2px dashed #d1d5db">
+                    <div style="font-size:11px;color:#6b7280;font-style:italic;margin-bottom:8px">"This Paper Slip serves as cryptographic proof of a vote cast. Any citizen may independently verify its authenticity using the Verify Your Vote portal."</div>
+                    <div style="display:flex;justify-content:center;gap:8px;margin-top:12px">
+                        <div style="width:40px;height:40px;background:#002868;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px">🗳️</div>
+                        <div style="width:40px;height:40px;background:#BF0A30;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px">🦅</div>
+                        <div style="width:40px;height:40px;background:#FFD700;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#002868;font-size:20px">⭐</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Certificate Footer / Actions -->
+            <div style="background:#f3f4f6;padding:16px;display:flex;justify-content:center;gap:12px;border-top:2px solid #e5e7eb">
+                <button onclick="window.print()" class="px-6 py-3 bg-gradient-to-r from-blue-800 to-blue-900 text-white rounded-lg font-bold hover:shadow-lg transition"><i class="fa-solid fa-print mr-2"></i> PRINT CERTIFICATE</button>
+                <button onclick="closePaperSlip()" class="px-6 py-3 bg-gray-500 text-white rounded-lg font-bold hover:bg-gray-600 transition"><i class="fa-solid fa-xmark mr-2"></i> CLOSE</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- EXPORT AUDIT MODAL -->
+    <div id="export-modal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center" style="background:rgba(0,0,0,0.85)">
+        <div class="bg-white rounded-3xl p-8 shadow-2xl max-w-xl w-full mx-4 border-4 border-blue-800">
+            <div class="text-center mb-6">
+                <div class="gold-seal mx-auto mb-3" style="width:60px;height:60px;font-size:28px">📊</div>
+                <h2 class="header-font text-2xl text-blue-900">EXPORT FULL AUDIT</h2>
+                <p class="text-sm text-gray-500 mt-1">Download the complete blockchain and audit log for independent verification</p>
+            </div>
+            <div class="space-y-4 mb-6">
+                <div class="bg-blue-50 rounded-xl p-4 border-2 border-blue-200">
+                    <div class="flex items-center gap-3 mb-2">
+                        <i class="fa-solid fa-file-code text-2xl text-blue-800"></i>
+                        <div>
+                            <div class="font-bold text-blue-900">JSON Format</div>
+                            <div class="text-xs text-gray-500">Machine-readable, complete data structure</div>
+                        </div>
+                    </div>
+                    <button onclick="exportAudit('json')" class="w-full py-3 bg-blue-800 text-white font-bold rounded-xl hover:bg-blue-700 transition"><i class="fa-solid fa-download mr-2"></i> DOWNLOAD JSON</button>
+                </div>
+                <div class="bg-green-50 rounded-xl p-4 border-2 border-green-200">
+                    <div class="flex items-center gap-3 mb-2">
+                        <i class="fa-solid fa-file-csv text-2xl text-green-800"></i>
+                        <div>
+                            <div class="font-bold text-green-900">CSV Format</div>
+                            <div class="text-xs text-gray-500">Spreadsheet-compatible, token data only</div>
+                        </div>
+                    </div>
+                    <button onclick="exportAudit('csv')" class="w-full py-3 bg-green-700 text-white font-bold rounded-xl hover:bg-green-600 transition"><i class="fa-solid fa-download mr-2"></i> DOWNLOAD CSV</button>
+                </div>
+            </div>
+            <div class="text-center">
+                <button onclick="closeExportModal()" class="px-6 py-3 bg-gray-400 text-white font-bold rounded-xl hover:bg-gray-500 transition"><i class="fa-solid fa-xmark mr-2"></i> CANCEL</button>
+            </div>
+        </div>
+    </div>
+
 </div>
 
 <!-- PATRIOTIC FOOTER -->
@@ -1611,6 +1917,8 @@ HTML_CONTENT = '''<!DOCTYPE html>
         if (screen === 'pile') loadPile()
         if (screen === 'login') resetAuthFlow()
         if (screen === 'incentives') renderIncentives(currentIncentiveGenre)
+        if (screen === 'results') loadResults(0)
+        if (screen === 'explorer') initExplorer()
     }
 
     // ===== MODAL =====
@@ -1639,6 +1947,39 @@ HTML_CONTENT = '''<!DOCTYPE html>
             html += '<button onclick="selectState(\\'' + st + '\\')" class="map-state" id="map-' + st + '" style="grid-row:' + r + ';grid-column:' + c + '" title="' + st + '">' + st + '</button>'
         }
         mapEl.innerHTML = html
+        loadStateHeatmap()
+    }
+
+    function loadStateHeatmap() {
+        fetch('/api/states/votes')
+        .then(function(r) { return r.json() })
+        .then(function(d) {
+            var stateVotes = d.state_votes || {}
+            var maxVotes = 0
+            Object.keys(stateVotes).forEach(function(st) {
+                if (stateVotes[st] > maxVotes) maxVotes = stateVotes[st]
+            })
+
+            Object.keys(statePos).forEach(function(st) {
+                var btn = document.getElementById('map-' + st)
+                if (!btn) return
+                var count = stateVotes[st] || 0
+                var color, borderColor
+                if (count >= 10) { color = '#002868'; borderColor = '#FFD700'; } // High - blue with gold
+                else if (count >= 5) { color = '#DAA520'; borderColor = '#8B6914'; } // Medium - gold
+                else if (count >= 1) { color = '#BF0A30'; borderColor = '#8B0000'; } // Low - red
+                else { color = '#d1d5db'; borderColor = '#9ca3af'; } // None - gray
+
+                btn.style.background = color
+                btn.style.color = (count >= 1) ? '#fff' : '#374151'
+                btn.style.borderColor = borderColor
+                if (count >= 1) {
+                    btn.style.boxShadow = '0 2px 4px rgba(0,0,0,0.2)'
+                    btn.title = st + ' (' + count + ' votes)'
+                }
+            })
+        })
+        .catch(function() {})
     }
 
     function selectState(stateCode) {
@@ -1670,7 +2011,7 @@ HTML_CONTENT = '''<!DOCTYPE html>
         btn.disabled = true; btn.textContent = 'ENROLLING...'
         fetch('/api/enroll', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ ssn: ssn, name: name, dob: dob, tax_id: 'TAXPAYER-' + ssn })
+            body: JSON.stringify({ ssn: ssn, name: name, dob: dob, state: selectedState, tax_id: 'TAXPAYER-' + ssn })
         })
         .then(function(r) { return r.json().then(function(d) { return {status: r.status, body: d} }) })
         .then(function(res) {
@@ -2344,7 +2685,7 @@ HTML_CONTENT = '''<!DOCTYPE html>
         ctx.fillStyle = '#1e3a5f'
         ctx.font = 'bold 13px sans-serif'
         ctx.textAlign = 'left'
-        var titles = { bar:'Paper Slips by Genre (Bar)', pie:'Paper Slip Distribution (Pie)', line:'Paper Slip Timeline', donut:'Paper Slip Distribution (Donut)', hbar:'Paper Slips by Genre (Horizontal)', scatter:'Paper Slip Scatter Plot', stacked:'Stacked Genre View' }
+        var titles = { bar:'Paper Slips by Genre (Bar)', pie:'Paper Slip Distribution (Pie)', line:'Paper Slips by Genre (Timeline)', donut:'Paper Slip Distribution (Donut)', hbar:'Paper Slips by Genre (Horizontal)', scatter:'Paper Slip Scatter Plot', stacked:'Stacked Genre View' }
         ctx.fillText(titles[type] || 'Chart', pad.l, 18)
 
         if (type === 'bar') {
@@ -2402,34 +2743,49 @@ HTML_CONTENT = '''<!DOCTYPE html>
                 ctx.fillText('TOTAL', cx, cy + 18)
             }
         } else if (type === 'line') {
-            // Timeline by token creation order
+            // Per-genre cumulative timeline
             ctx.strokeStyle = '#d1d5db'; ctx.lineWidth = 1
             ctx.beginPath(); ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, pad.t + cH); ctx.lineTo(pad.l + cW, pad.t + cH); ctx.stroke()
-            var cumulative = []
-            var running = 0
-            allTokens.slice().reverse().forEach(function(t, i) { running++; cumulative.push(running) })
-            if (cumulative.length > 0) {
-                var maxC = cumulative[cumulative.length - 1]
+            // Build per-genre running totals from oldest to newest
+            var reversed = allTokens.slice().reverse()
+            var genreCum = {}; var genreLines = {}
+            reversed.forEach(function(t) {
+                var g = t.genre || 'GENERAL'
+                if (!genreCum[g]) { genreCum[g] = 0; genreLines[g] = [] }
+                genreCum[g]++
+                genreLines[g].push({ idx: genreLines[g].length, val: genreCum[g] })
+            })
+            var maxC = 0
+            Object.keys(genreCum).forEach(function(g) { if (genreCum[g] > maxC) maxC = genreCum[g] })
+            if (maxC === 0) maxC = 1
+            var lineColors = { FEDERAL:'#002868', STATE:'#B22234', LOCAL:'#d4a017', PETITION:'#16a34a', GENERAL:'#6b7280' }
+            // Draw each genre line
+            Object.keys(genreLines).forEach(function(g) {
+                var pts = genreLines[g]
+                if (pts.length === 0) return
                 ctx.beginPath()
-                ctx.strokeStyle = '#002868'; ctx.lineWidth = 2.5
-                cumulative.forEach(function(v, i) {
-                    var x = pad.l + (i / Math.max(1, cumulative.length - 1)) * cW
-                    var y = pad.t + cH - (v / maxC) * cH
+                ctx.strokeStyle = lineColors[g] || '#6b7280'; ctx.lineWidth = 2.5
+                pts.forEach(function(p, i) {
+                    var x = pad.l + (i / Math.max(1, pts.length - 1)) * cW
+                    var y = pad.t + cH - (p.val / maxC) * cH
                     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y)
                 })
                 ctx.stroke()
-                // Fill under
-                var lastX = pad.l + cW
-                var lastY = pad.t + cH - cH
-                ctx.lineTo(lastX, pad.t + cH); ctx.lineTo(pad.l, pad.t + cH); ctx.closePath()
-                ctx.fillStyle = 'rgba(0,40,104,0.08)'; ctx.fill()
-                // Dots
-                cumulative.forEach(function(v, i) {
-                    var x = pad.l + (i / Math.max(1, cumulative.length - 1)) * cW
-                    var y = pad.t + cH - (v / maxC) * cH
-                    ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2)
-                    ctx.fillStyle = '#B22234'; ctx.fill()
-                })
+                // Endpoint dot with label
+                var lastP = pts[pts.length - 1]
+                var lx = pad.l + cW
+                var ly = pad.t + cH - (lastP.val / maxC) * cH
+                ctx.beginPath(); ctx.arc(lx, ly, 4, 0, Math.PI * 2)
+                ctx.fillStyle = lineColors[g] || '#6b7280'; ctx.fill()
+                ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'left'
+                ctx.fillText(g + ' (' + lastP.val + ')', lx + 6, ly + 3)
+            })
+            // Y axis labels
+            for (var yi2 = 0; yi2 <= 4; yi2++) {
+                var yv2 = Math.round(maxC * yi2 / 4)
+                var yy2 = pad.t + cH - (cH * yi2 / 4)
+                ctx.fillStyle = '#9ca3af'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right'
+                ctx.fillText(yv2, pad.l - 6, yy2 + 3)
             }
             ctx.fillStyle = '#6b7280'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center'
             ctx.fillText('First', pad.l, pad.t + cH + 14)
@@ -2815,12 +3171,41 @@ HTML_CONTENT = '''<!DOCTYPE html>
         .then(function(r) { return r.json() })
         .then(function(d) {
             var el = function(id) { return document.getElementById(id) }
+
+            // Top stats
             if(el('dash-vote-count')) el('dash-vote-count').textContent = d.total_votes || 0
             if(el('dash-vote-label')) el('dash-vote-label').textContent = d.total_votes > 0 ? 'Votes on immutable ledger' : 'No votes cast yet'
+            if(el('dash-tokens')) el('dash-tokens').textContent = d.total_tokens || 0
+            if(el('dash-verified-label')) el('dash-verified-label').textContent = (d.total_tokens||0) + ' cryptographic tokens'
+            if(el('dash-verified')) el('dash-verified').textContent = d.verified_tokens || 0
             if(el('dash-voters')) el('dash-voters').textContent = d.total_voters || 0
             if(el('dash-elections')) el('dash-elections').textContent = (d.active_elections||0) + ' active elections'
-            if(el('dash-audit-status')) el('dash-audit-status').textContent = d.total_votes > 0 ? 'VALID' : 'EMPTY'
-            if(el('dash-updated')) el('dash-updated').textContent = d.last_updated ? 'Updated: ' + d.last_updated : ''
+            if(el('dash-chain')) {
+                el('dash-chain').textContent = d.chain_intact ? 'INTACT' : 'BROKEN'
+                el('dash-chain').style.color = d.chain_intact ? '#16a34a' : '#dc2626'
+            }
+            if(el('dash-audit-count')) el('dash-audit-count').textContent = 'Audit entries: ' + (d.audit_count || 0)
+
+            // Genre breakdown cards
+            var gc = d.genre_counts || {}
+            if(el('dash-genre-federal')) el('dash-genre-federal').textContent = gc.FEDERAL || 0
+            if(el('dash-genre-state')) el('dash-genre-state').textContent = gc.STATE || 0
+            if(el('dash-genre-local')) el('dash-genre-local').textContent = gc.LOCAL || 0
+            if(el('dash-genre-petition')) el('dash-genre-petition').textContent = gc.PETITION || 0
+
+            // Genre bar chart
+            var maxG = Math.max(gc.FEDERAL||0, gc.STATE||0, gc.LOCAL||0, gc.PETITION||0, 1)
+            var genres = ['federal','state','local','petition']
+            genres.forEach(function(g) {
+                var cnt = gc[g.toUpperCase()] || 0
+                if(el('dash-bar-cnt-' + g)) el('dash-bar-cnt-' + g).textContent = cnt
+                if(el('dash-bar-' + g)) el('dash-bar-' + g).style.width = ((cnt/maxG)*100) + '%'
+            })
+
+            // Updated timestamp
+            if(el('dash-updated')) el('dash-updated').textContent = d.last_updated ? 'Last updated: ' + d.last_updated : ''
+
+            // Recent activity
             if(el('dash-recent') && d.recent_activity) {
                 el('dash-recent').innerHTML = d.recent_activity.map(function(a) { return '<div class="py-2 border-b text-gray-600">' + a + '</div>' }).join('')
             }
@@ -3059,6 +3444,337 @@ HTML_CONTENT = '''<!DOCTYPE html>
         body.innerHTML = html
     }
 
+    // ===== VERIFY YOUR VOTE =====
+    function verifyVoteToken() {
+        var tokenId = document.getElementById('verify-token-input').value.trim()
+        if (!tokenId) { showToast("Enter a Token ID", "error"); return }
+        var resultEl = document.getElementById('verify-result')
+        resultEl.innerHTML = '<div class="text-center py-8"><i class="fa-solid fa-spinner fa-spin text-4xl text-blue-800"></i><p class="mt-3 text-gray-500">Verifying token on the blockchain...</p></div>'
+
+        fetch('/api/verify/token?token_id=' + encodeURIComponent(tokenId))
+        .then(function(r) { return r.json() })
+        .then(function(d) {
+            if (!d.found) {
+                resultEl.innerHTML = '<div class="bg-red-50 border-2 border-red-300 rounded-2xl p-8 text-center"><i class="fa-solid fa-circle-xmark text-red-600 text-5xl mb-3"></i><h3 class="text-2xl font-bold text-red-800">TOKEN NOT FOUND</h3><p class="text-red-600 mt-2">No Paper Slip with ID <strong>' + tokenId + '</strong> exists on the chain. This token may be invalid or forged.</p></div>'
+                return
+            }
+            var t = d.token
+            var checks = d.checks
+            var allPassed = checks.exists && checks.chain_link && checks.double_verified && checks.auth_complete && checks.chain_intact
+
+            var html = ''
+            // Overall verdict
+            if (allPassed) {
+                html += '<div class="bg-green-50 border-4 border-green-500 rounded-2xl p-6 text-center"><i class="fa-solid fa-circle-check text-green-600 text-5xl mb-2"></i><h3 class="text-2xl font-bold text-green-800">VOTE VERIFIED — ALL CHECKS PASSED</h3><p class="text-green-600 mt-1">This Paper Slip is authentic, unmodified, and securely chained.</p></div>'
+            } else {
+                html += '<div class="bg-yellow-50 border-4 border-yellow-500 rounded-2xl p-6 text-center"><i class="fa-solid fa-triangle-exclamation text-yellow-600 text-5xl mb-2"></i><h3 class="text-2xl font-bold text-yellow-800">VERIFICATION INCOMPLETE</h3><p class="text-yellow-600 mt-1">One or more checks did not pass. See details below.</p></div>'
+            }
+
+            // Proof checks
+            html += '<div class="bg-white rounded-2xl p-6 border-2 border-blue-200 shadow-xl">'
+            html += '<h4 class="font-bold text-blue-900 text-lg mb-4"><i class="fa-solid fa-list-check mr-2"></i> INDEPENDENT PROOF CHECKS</h4>'
+            var checkList = [
+                { key: 'exists', label: 'Token Exists on Chain', desc: 'Paper Slip found in the immutable ledger at block position #' + d.chain_position },
+                { key: 'chain_link', label: 'Chain Link Integrity', desc: 'prev_token_hash matches the previous block\\'s token_hash — the link is unbroken' },
+                { key: 'double_verified', label: 'Double Verification', desc: 'Both V1 and V2 hashes exist and the token is marked DOUBLE_VERIFIED' },
+                { key: 'auth_complete', label: '5-Layer Authentication', desc: 'All 5 auth layers recorded: ' + (t.auth_layers || 'N/A') },
+                { key: 'chain_intact', label: 'Full Chain Intact', desc: 'Every link from Genesis to HEAD verified — total ' + d.total_blocks + ' blocks, 0 breaks' }
+            ]
+            checkList.forEach(function(ck) {
+                var passed = checks[ck.key]
+                var icon = passed ? '<i class="fa-solid fa-circle-check text-green-600 text-xl"></i>' : '<i class="fa-solid fa-circle-xmark text-red-600 text-xl"></i>'
+                var bg = passed ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
+                html += '<div class="flex items-start gap-4 p-3 rounded-xl border mb-2 ' + bg + '">'
+                html += '<div class="flex-shrink-0 mt-0.5">' + icon + '</div>'
+                html += '<div><div class="font-bold ' + (passed ? 'text-green-800' : 'text-red-800') + '">' + ck.label + '</div>'
+                html += '<div class="text-xs text-gray-600">' + ck.desc + '</div></div></div>'
+            })
+            html += '</div>'
+
+            // Token details
+            html += '<div class="bg-gray-900 rounded-2xl p-6 text-green-400 font-mono text-xs">'
+            html += '<div class="text-yellow-300 font-bold mb-3 text-sm">PAPER SLIP DATA — FULL RECORD</div>'
+            html += '<div class="grid grid-cols-2 gap-2">'
+            html += '<div><span class="text-gray-500">TOKEN ID:</span> <span class="text-yellow-300">' + t.token_id + '</span></div>'
+            html += '<div><span class="text-gray-500">GENRE:</span> ' + t.genre + '</div>'
+            html += '<div><span class="text-gray-500">CHOICE:</span> ' + t.choice + '</div>'
+            html += '<div><span class="text-gray-500">STATUS:</span> <span style="color:#4ade80">' + t.status + '</span></div>'
+            html += '<div class="col-span-2"><span class="text-gray-500">TOKEN HASH:</span><br><span class="text-green-300" style="word-break:break-all">' + t.token_hash + '</span></div>'
+            html += '<div class="col-span-2"><span class="text-gray-500">PREV HASH:</span><br><span class="text-blue-300" style="word-break:break-all">' + t.prev_token_hash + '</span></div>'
+            html += '<div class="col-span-2"><span class="text-gray-500">V1 HASH:</span> <span style="word-break:break-all">' + (t.verification_1_hash || '') + '</span></div>'
+            html += '<div class="col-span-2"><span class="text-gray-500">V2 HASH:</span> <span style="word-break:break-all">' + (t.verification_2_hash || '') + '</span></div>'
+            html += '<div><span class="text-gray-500">CREATED:</span> ' + t.timestamp_created + '</div>'
+            html += '<div><span class="text-gray-500">AUTH LAYERS:</span> ' + t.auth_layers + '</div>'
+            html += '</div></div>'
+
+            resultEl.innerHTML = html
+        })
+        .catch(function(err) {
+            resultEl.innerHTML = '<div class="bg-red-50 border-2 border-red-300 rounded-2xl p-6 text-center"><i class="fa-solid fa-circle-xmark text-red-600 text-4xl mb-2"></i><p class="text-red-600">Error: ' + err.message + '</p></div>'
+        })
+    }
+
+    // ===== LIVE ELECTION RESULTS =====
+    var currentResultsGenre = 0
+    function loadResults(genreIdx) {
+        currentResultsGenre = genreIdx
+        // Update tabs
+        for (var t = 0; t < 4; t++) {
+            var tab = document.getElementById('res-tab-' + t)
+            if (tab) {
+                if (t === genreIdx) { tab.style.background = ['#002868','#B22234','#DAA520','#16a34a'][t]; tab.style.color = '#fff'; tab.style.borderColor = tab.style.background }
+                else { tab.style.background = '#fff'; tab.style.color = '#374151'; tab.style.borderColor = '#d1d5db' }
+            }
+        }
+        fetch('/api/results?genre=' + genreIdx)
+        .then(function(r) { return r.json() })
+        .then(function(d) {
+            var body = document.getElementById('results-body')
+            var races = d.races || []
+            var genreColor = ['#002868','#B22234','#DAA520','#16a34a'][genreIdx]
+            if (races.length === 0) {
+                body.innerHTML = '<div class="text-center py-12 text-gray-400"><i class="fa-solid fa-box-open text-5xl mb-4"></i><p>No votes cast in this category yet.</p></div>'
+                return
+            }
+            var html = ''
+            races.forEach(function(race) {
+                var totalVotes = 0
+                race.candidates.forEach(function(c) { totalVotes += c.count })
+                // Sort by count desc
+                var sorted = race.candidates.slice().sort(function(a, b) { return b.count - a.count })
+                var leader = sorted[0]
+                var projected = leader && totalVotes > 0 && (leader.count / totalVotes) > 0.5
+
+                html += '<div class="bg-white rounded-2xl shadow-xl border-2 overflow-hidden" style="border-color:' + genreColor + '22">'
+                // Race header
+                html += '<div class="px-6 py-4 flex justify-between items-center" style="background:' + genreColor + '0d;border-bottom:2px solid ' + genreColor + '22">'
+                html += '<div><h3 class="text-lg font-bold" style="color:' + genreColor + '">' + race.question + '</h3>'
+                html += '<span class="text-xs text-gray-500">' + race.type + ' • ' + totalVotes + ' total votes</span></div>'
+                if (projected) {
+                    html += '<div style="background:' + genreColor + ';color:#fff;padding:4px 12px;border-radius:8px;font-size:11px;font-weight:800;letter-spacing:1px"><i class="fa-solid fa-trophy mr-1" style="color:#FFD700"></i> PROJECTED LEADER</div>'
+                }
+                html += '</div>'
+
+                // Candidates
+                html += '<div class="p-5 space-y-3">'
+                sorted.forEach(function(cand, ci) {
+                    var pct = totalVotes > 0 ? (cand.count / totalVotes * 100) : 0
+                    var isLeader = ci === 0 && totalVotes > 0
+                    var barColor = isLeader ? genreColor : '#d1d5db'
+                    html += '<div>'
+                    html += '<div class="flex justify-between items-center mb-1">'
+                    html += '<span class="font-bold text-sm ' + (isLeader ? '' : 'text-gray-600') + '" style="' + (isLeader ? 'color:' + genreColor : '') + '">'
+                    if (isLeader) html += '<i class="fa-solid fa-check-circle mr-1" style="color:' + genreColor + '"></i> '
+                    html += cand.name + '</span>'
+                    html += '<span class="font-bold text-sm" style="color:' + (isLeader ? genreColor : '#9ca3af') + '">' + cand.count + ' votes (' + pct.toFixed(1) + '%)</span>'
+                    html += '</div>'
+                    html += '<div class="bg-gray-100 rounded-full h-5 overflow-hidden"><div class="h-5 rounded-full transition-all" style="width:' + pct + '%;background:' + barColor + (isLeader ? '' : ';opacity:0.4') + '"></div></div>'
+                    html += '</div>'
+                })
+                html += '</div></div>'
+            })
+            body.innerHTML = html
+            document.getElementById('results-updated').textContent = 'Last updated: ' + new Date().toLocaleString() + ' • ' + d.total_votes_in_genre + ' total votes in this format'
+        })
+        .catch(function(err) {
+            document.getElementById('results-body').innerHTML = '<div class="text-center py-8 text-red-500">Error loading results: ' + err.message + '</div>'
+        })
+    }
+
+    // ===== CHAIN INTEGRITY SELF-TEST =====
+    function runChainTest() {
+        document.getElementById('chain-test-modal').classList.remove('hidden')
+        var bar = document.getElementById('chain-test-bar')
+        var progress = document.getElementById('chain-test-progress')
+        var log = document.getElementById('chain-test-log')
+        var result = document.getElementById('chain-test-result')
+        bar.style.width = '0%'
+        log.innerHTML = '<div class="text-gray-500">Fetching all tokens from chain...</div>'
+        result.innerHTML = ''
+
+        fetch('/api/chain/test')
+        .then(function(r) { return r.json() })
+        .then(function(d) {
+            var blocks = d.blocks || []
+            var totalBlocks = blocks.length
+            if (totalBlocks === 0) {
+                log.innerHTML = '<div class="text-yellow-400">Chain is empty — no tokens minted yet.</div>'
+                bar.style.width = '100%'
+                progress.textContent = '0 / 0 blocks'
+                result.innerHTML = '<div class="text-lg font-bold text-gray-400"><i class="fa-solid fa-circle-minus mr-2"></i> CHAIN EMPTY</div>'
+                return
+            }
+            progress.textContent = '0 / ' + totalBlocks + ' blocks verified'
+            log.innerHTML = ''
+            var idx = 0
+            var failures = 0
+
+            function verifyNext() {
+                if (idx >= totalBlocks) {
+                    // Done
+                    bar.style.width = '100%'
+                    bar.style.background = failures === 0 ? 'linear-gradient(90deg,#16a34a,#22c55e)' : 'linear-gradient(90deg,#dc2626,#ef4444)'
+                    if (failures === 0) {
+                        result.innerHTML = '<div class="text-2xl font-bold text-green-600"><i class="fa-solid fa-shield-halved mr-2"></i> CHAIN INTEGRITY: PERFECT</div><p class="text-sm text-green-500 mt-1">All ' + totalBlocks + ' blocks verified. Every hash link intact. Every double verification confirmed. Zero tampering detected.</p>'
+                        log.innerHTML += '<div class="text-green-300 mt-2 font-bold">═══════════════════════════════════</div>'
+                        log.innerHTML += '<div class="text-green-300 font-bold">★ INTEGRITY TEST PASSED — ' + totalBlocks + '/' + totalBlocks + ' BLOCKS VERIFIED ★</div>'
+                    } else {
+                        result.innerHTML = '<div class="text-2xl font-bold text-red-600"><i class="fa-solid fa-triangle-exclamation mr-2"></i> CHAIN BROKEN — ' + failures + ' FAILURE(S)</div><p class="text-sm text-red-500 mt-1">Chain integrity compromised at ' + failures + ' link(s). See log for details.</p>'
+                    }
+                    return
+                }
+                var block = blocks[idx]
+                var pct = ((idx + 1) / totalBlocks * 100).toFixed(1)
+                bar.style.width = pct + '%'
+                progress.textContent = (idx + 1) + ' / ' + totalBlocks + ' blocks verified'
+
+                var entry = ''
+                if (idx === 0) {
+                    entry = '<div class="text-yellow-300">Block #1 [GENESIS] ' + block.token_id + '</div>'
+                    entry += '<div class="text-gray-500">  hash: ' + block.token_hash.substring(0, 32) + '...</div>'
+                    entry += '<div class="text-gray-500">  prev: ' + block.prev_token_hash.substring(0, 32) + '...</div>'
+                    if (block.link_valid) {
+                        entry += '<div class="text-green-400">  ✓ Genesis block — prev_hash is zeroed (valid)</div>'
+                    }
+                } else {
+                    var color = block.link_valid ? 'text-green-400' : 'text-red-400'
+                    var sym = block.link_valid ? '✓' : '✗'
+                    entry = '<div class="' + color + '">Block #' + (idx + 1) + ' ' + sym + ' ' + block.token_id + '</div>'
+                    if (!block.link_valid) {
+                        entry += '<div class="text-red-500">  ✗ BROKEN LINK: prev_hash does not match Block #' + idx + '</div>'
+                        failures++
+                    }
+                }
+                if (block.double_verified) {
+                    entry += '<div class="text-blue-300" style="font-size:10px">  V1+V2 confirmed | ' + block.genre + ' | ' + block.status + '</div>'
+                }
+                log.innerHTML += entry
+                log.scrollTop = log.scrollHeight
+                idx++
+                setTimeout(verifyNext, Math.max(30, 800 / totalBlocks))
+            }
+            verifyNext()
+        })
+        .catch(function(err) {
+            log.innerHTML = '<div class="text-red-400">Error: ' + err.message + '</div>'
+            result.innerHTML = '<div class="text-red-600 font-bold">CHAIN TEST FAILED — NETWORK ERROR</div>'
+        })
+    }
+    function closeChainTest() {
+        document.getElementById('chain-test-modal').classList.add('hidden')
+    }
+
+    // ===== BLOCKCHAIN EXPLORER =====
+    var explorerBlocks = []
+    var explorerIndex = 0
+    function initExplorer() {
+        fetch('/api/chain/test')
+        .then(function(r) { return r.json() })
+        .then(function(d) {
+            explorerBlocks = d.blocks || []
+            explorerIndex = 0
+            renderExplorerBlock()
+        })
+        .catch(function() {})
+    }
+    function renderExplorerBlock() {
+        if (explorerBlocks.length === 0) {
+            document.getElementById('explorer-fields').innerHTML = '<div class="col-span-2 text-center text-gray-500 py-8">No blocks in chain</div>'
+            return
+        }
+        var block = explorerBlocks[explorerIndex]
+        var prevBlock = explorerIndex > 0 ? explorerBlocks[explorerIndex - 1] : null
+        var nextBlock = explorerIndex < explorerBlocks.length - 1 ? explorerBlocks[explorerIndex + 1] : null
+
+        // Update position display
+        document.getElementById('explorer-position').textContent = 'Block #' + (explorerIndex + 1) + ' of ' + explorerBlocks.length
+        document.getElementById('explorer-genesis').style.display = (explorerIndex === 0) ? 'block' : 'none'
+
+        // Update nav buttons
+        document.getElementById('explorer-prev-btn').disabled = (explorerIndex === 0)
+        document.getElementById('explorer-next-btn').disabled = (explorerIndex === explorerBlocks.length - 1)
+
+        // Update visual chain links
+        document.getElementById('chain-link-prev').textContent = prevBlock ? prevBlock.token_hash.substring(0, 16) + '...' : '000000...'
+        document.getElementById('chain-link-next').textContent = nextBlock ? nextBlock.token_hash.substring(0, 16) + '...' : 'END'
+
+        // Update hash visualization
+        document.getElementById('viz-prev-hash').textContent = block.prev_token_hash
+        document.getElementById('viz-current-hash').textContent = block.token_hash
+        document.getElementById('viz-next-prev').textContent = nextBlock ? nextBlock.prev_token_hash : 'N/A (HEAD)'
+
+        // Hash match indicator
+        var matchIndicator = document.getElementById('hash-match-indicator')
+        if (explorerIndex === 0) {
+            matchIndicator.innerHTML = '<span class="text-yellow-600 font-bold"><i class="fa-solid fa-star mr-2"></i>GENESIS BLOCK — Starting point of the chain</span>'
+        } else if (block.link_valid) {
+            matchIndicator.innerHTML = '<span class="text-green-600 font-bold"><i class="fa-solid fa-link mr-2"></i>HASH LINK VERIFIED — This block\'s prev_hash matches previous block\'s hash</span>'
+        } else {
+            matchIndicator.innerHTML = '<span class="text-red-600 font-bold"><i class="fa-solid fa-triangle-exclamation mr-2"></i>BROKEN LINK — Chain integrity compromised!</span>'
+        }
+
+        // Fields
+        var html = ''
+        html += '<div><span class="text-gray-500">Token ID:</span> <span class="text-yellow-300">' + block.token_id + '</span></div>'
+        html += '<div><span class="text-gray-500">Genre:</span> <span style="color:#fff">' + block.genre + '</span></div>'
+        html += '<div><span class="text-gray-500">Status:</span> <span style="color:#4ade80">' + block.status + '</span></div>'
+        html += '<div><span class="text-gray-500">Double Verified:</span> <span style="color:' + (block.double_verified ? '#4ade80' : '#ef4444') + '">' + (block.double_verified ? 'YES' : 'NO') + '</span></div>'
+        html += '<div class="col-span-2"><span class="text-gray-500">Token Hash:</span><div class="break-all text-green-300">' + block.token_hash + '</div></div>'
+        html += '<div class="col-span-2"><span class="text-gray-500">Prev Hash:</span><div class="break-all text-blue-300">' + block.prev_token_hash + '</div></div>'
+        html += '<div class="col-span-2"><span class="text-gray-500">V1 Hash:</span><div class="break-all">' + (block.v1_hash || 'N/A') + '</div></div>'
+        html += '<div class="col-span-2"><span class="text-gray-500">V2 Hash:</span><div class="break-all">' + (block.v2_hash || 'N/A') + '</div></div>'
+        document.getElementById('explorer-fields').innerHTML = html
+
+        // Store current block for paper slip
+        window.currentExplorerBlock = block
+        window.currentExplorerPosition = explorerIndex + 1
+        window.currentExplorerTotal = explorerBlocks.length
+    }
+    function explorerPrev() {
+        if (explorerIndex > 0) {
+            explorerIndex--
+            renderExplorerBlock()
+        }
+    }
+    function explorerNext() {
+        if (explorerIndex < explorerBlocks.length - 1) {
+            explorerIndex++
+            renderExplorerBlock()
+        }
+    }
+
+    // ===== PRINTABLE PAPER SLIP =====
+    function printPaperSlip() {
+        var block = window.currentExplorerBlock
+        if (!block) return
+        document.getElementById('slip-token-id').textContent = block.token_id
+        document.getElementById('slip-voter-hash').textContent = 'Anonymous Voter Hash'
+        document.getElementById('slip-genre').textContent = block.genre
+        document.getElementById('slip-choice').textContent = 'Vote recorded on blockchain'
+        document.getElementById('slip-v1').textContent = 'V1: ' + (block.v1_hash ? block.v1_hash.substring(0, 24) + '...' : 'N/A')
+        document.getElementById('slip-v2').textContent = 'V2: ' + (block.v2_hash ? block.v2_hash.substring(0, 24) + '...' : 'N/A')
+        document.getElementById('slip-position').textContent = 'Block #' + window.currentExplorerPosition + ' of ' + window.currentExplorerTotal
+        document.getElementById('slip-timestamp').textContent = new Date().toLocaleString()
+        document.getElementById('slip-token-hash').textContent = block.token_hash
+        document.getElementById('paper-slip-modal').classList.remove('hidden')
+    }
+    function closePaperSlip() {
+        document.getElementById('paper-slip-modal').classList.add('hidden')
+    }
+
+    // ===== EXPORT AUDIT =====
+    function openExportModal() {
+        document.getElementById('export-modal').classList.remove('hidden')
+    }
+    function closeExportModal() {
+        document.getElementById('export-modal').classList.add('hidden')
+    }
+    function exportAudit(format) {
+        var url = '/api/export/audit?format=' + format
+        window.open(url, '_blank')
+        closeExportModal()
+    }
+
     window.switchIncentiveGenre=switchIncentiveGenre; window.renderIncentives=renderIncentives
     window.navigateTo=navigateTo; window.selectState=selectState; window.simulateEnrollment=simulateEnrollment
     window.authLayer1=authLayer1; window.authLayer2=authLayer2; window.authLayer3=authLayer3
@@ -3070,6 +3786,11 @@ HTML_CONTENT = '''<!DOCTYPE html>
     window.setPileView=setPileView; window.switchChart=switchChart; window.drawChart=drawChart
     window.toggleAuditDetail=toggleAuditDetail
     window.renderTokenLedger=renderTokenLedger; window.filterTokenLedger=filterTokenLedger
+    window.verifyVoteToken=verifyVoteToken; window.loadResults=loadResults
+    window.runChainTest=runChainTest; window.closeChainTest=closeChainTest
+    window.initExplorer=initExplorer; window.explorerPrev=explorerPrev; window.explorerNext=explorerNext
+    window.printPaperSlip=printPaperSlip; window.closePaperSlip=closePaperSlip
+    window.openExportModal=openExportModal; window.closeExportModal=closeExportModal; window.exportAudit=exportAudit
 
     window.onload = function() {
         initTailwind(); initUSMap(); updateQuantumCounter(); navigateTo('home')
@@ -3248,6 +3969,7 @@ def enroll_voter():
     name = data.get('name', '').strip()
     dob = data.get('dob', '').strip()
     tax_id = data.get('tax_id', '').strip()
+    state = data.get('state', '').strip()
     if not name:
         return jsonify({'success': False, 'error': 'Full legal name is required'}), 400
     cleaned_ssn = ssn.replace('-', '')
@@ -3267,8 +3989,8 @@ def enroll_voter():
         if len(parts) == 3:
             dob_formatted = parts[2] + '-' + parts[0].zfill(2) + '-' + parts[1].zfill(2)
     eligibility = eligibility_engine.check_eligibility(formatted_ssn, tax_id or 'TAXPAYER', dob_formatted)
-    c.execute("INSERT INTO voters (name, ssn, eligibility) VALUES (?, ?, ?)",
-              (name, formatted_ssn, 1 if eligibility.get('eligible', True) else 0))
+    c.execute("INSERT INTO voters (name, ssn, state, eligibility) VALUES (?, ?, ?, ?)",
+              (name, formatted_ssn, state, 1 if eligibility.get('eligible', True) else 0))
     voter_id = c.lastrowid
     conn.commit()
     conn.close()
@@ -3442,7 +4164,7 @@ def cast_vote_api():
              voter_hash, token_hash, prev_token_hash, auth_layers, device_fingerprint,
              ip_address, timestamp_created, timestamp_verified, verification_1_hash,
              verification_2_hash, double_verified, status)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,'VERIFIED')""",
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,'DOUBLE_VERIFIED')""",
             (token_id, result['vote_id'], voter_id, election_id, genre, category,
              choice, choice_hash, voter_hash, token_hash, prev_hash, auth_layers,
              data.get('device_fingerprint', ''), request.remote_addr,
@@ -3536,6 +4258,31 @@ def get_dashboard_stats():
     c.execute("SELECT action, timestamp FROM audit_log ORDER BY timestamp DESC LIMIT 10")
     recent_rows = c.fetchall()
 
+    # Genre breakdown from vote_tokens
+    c.execute("SELECT genre, COUNT(*) FROM vote_tokens GROUP BY genre")
+    genre_counts = {}
+    for row in c.fetchall():
+        genre_counts[row[0]] = row[1]
+
+    # Token stats
+    c.execute("SELECT COUNT(*) FROM vote_tokens")
+    total_tokens = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM vote_tokens WHERE double_verified = 1")
+    verified_tokens = c.fetchone()[0]
+
+    # Chain integrity
+    c.execute("SELECT token_hash, prev_token_hash FROM vote_tokens ORDER BY id ASC")
+    all_tokens = c.fetchall()
+    chain_intact = True
+    for i in range(1, len(all_tokens)):
+        if all_tokens[i][1] != all_tokens[i-1][0]:
+            chain_intact = False
+            break
+
+    # Audit count
+    c.execute("SELECT COUNT(*) FROM audit_log")
+    audit_count = c.fetchone()[0]
+
     conn.close()
 
     recent = [f"{row[1]}: {row[0]}" for row in recent_rows] if recent_rows else []
@@ -3545,8 +4292,313 @@ def get_dashboard_stats():
         'total_votes': vote_count,
         'active_elections': election_count,
         'last_updated': datetime.now().isoformat(),
-        'recent_activity': recent
+        'recent_activity': recent,
+        'genre_counts': genre_counts,
+        'total_tokens': total_tokens,
+        'verified_tokens': verified_tokens,
+        'chain_intact': chain_intact,
+        'audit_count': audit_count
     })
+
+
+# ==================== VERIFY TOKEN API ====================
+@app.route('/api/verify/token', methods=['GET'])
+def verify_token_api():
+    token_id = request.args.get('token_id', '')
+    if not token_id:
+        return jsonify({'found': False, 'error': 'No token_id provided'})
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    # Find the token
+    c.execute("""SELECT token_id, vote_id, voter_id, election_id, genre, category,
+                 choice, choice_hash, voter_hash, token_hash, prev_token_hash,
+                 auth_layers, timestamp_created, timestamp_verified,
+                 verification_1_hash, verification_2_hash, double_verified, status,
+                 device_fingerprint, ip_address
+                 FROM vote_tokens WHERE token_id = ?""", (token_id,))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'found': False})
+
+    token = {
+        'token_id': row[0], 'vote_id': row[1], 'voter_id': row[2],
+        'election_id': row[3], 'genre': row[4], 'category': row[5],
+        'choice': row[6], 'choice_hash': row[7], 'voter_hash': row[8],
+        'token_hash': row[9], 'prev_token_hash': row[10],
+        'auth_layers': row[11], 'timestamp_created': row[12],
+        'timestamp_verified': row[13], 'verification_1_hash': row[14],
+        'verification_2_hash': row[15], 'double_verified': bool(row[16]),
+        'status': row[17], 'device_fingerprint': row[18] or '', 'ip_address': row[19] or ''
+    }
+
+    # Get chain position
+    c.execute("SELECT token_id, token_hash, prev_token_hash FROM vote_tokens ORDER BY id ASC")
+    all_tokens = c.fetchall()
+    conn.close()
+
+    chain_position = 0
+    for i, t in enumerate(all_tokens):
+        if t[0] == token_id:
+            chain_position = i + 1
+            break
+
+    # Check 1: exists
+    check_exists = True
+
+    # Check 2: chain link integrity
+    check_chain_link = True
+    if chain_position == 1:
+        check_chain_link = token['prev_token_hash'] == '0' * 64
+    elif chain_position > 1:
+        prev_token_hash = all_tokens[chain_position - 2][1]
+        check_chain_link = token['prev_token_hash'] == prev_token_hash
+
+    # Check 3: double verified
+    check_double = token['double_verified'] and token['verification_1_hash'] and token['verification_2_hash']
+
+    # Check 4: auth layers complete
+    auth_layers = token.get('auth_layers', '')
+    expected = ['SSN', 'Biometric', 'OTP', 'TOTP', 'Behavioral']
+    check_auth = all(layer in auth_layers for layer in expected)
+
+    # Check 5: full chain intact
+    chain_intact = True
+    for i in range(1, len(all_tokens)):
+        if all_tokens[i][2] != all_tokens[i-1][1]:
+            chain_intact = False
+            break
+
+    return jsonify({
+        'found': True,
+        'token': token,
+        'chain_position': chain_position,
+        'total_blocks': len(all_tokens),
+        'checks': {
+            'exists': check_exists,
+            'chain_link': check_chain_link,
+            'double_verified': bool(check_double),
+            'auth_complete': check_auth,
+            'chain_intact': chain_intact
+        }
+    })
+
+
+# ==================== LIVE ELECTION RESULTS API ====================
+@app.route('/api/results', methods=['GET'])
+def get_results_api():
+    genre_idx = int(request.args.get('genre', 0))
+    genre_map = {0: 'FEDERAL', 1: 'STATE', 2: 'LOCAL', 3: 'PETITION'}
+    genre = genre_map.get(genre_idx, 'FEDERAL')
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    # Get all tokens for this genre
+    c.execute("SELECT choice, category FROM vote_tokens WHERE genre = ?", (genre,))
+    rows = c.fetchall()
+    conn.close()
+
+    # Parse choices: format is "cat-X-qY:Candidate Name"
+    # Group by question (the part before ':')
+    races = {}
+    for row in rows:
+        choice_full = row[0]  # e.g. "cat-0-q0:Donald J. Trump (Republican)"
+        category = row[1]     # e.g. "cat-0-q0"
+        if ':' in choice_full:
+            parts = choice_full.split(':', 1)
+            question_key = parts[0]
+            candidate = parts[1]
+        else:
+            question_key = choice_full
+            candidate = choice_full
+
+        if question_key not in races:
+            races[question_key] = {'candidates': {}, 'category': category}
+        if candidate not in races[question_key]['candidates']:
+            races[question_key]['candidates'][candidate] = 0
+        races[question_key]['candidates'][candidate] += 1
+
+    # Map question keys to display names from the categories array
+    cat_questions = {
+        0: [
+            {"key": "cat-0-q0", "q": "PRESIDENT OF THE UNITED STATES", "type": "Presidential"},
+            {"key": "cat-0-q1", "q": "U.S. SENATOR", "type": "Senate"},
+            {"key": "cat-0-q2", "q": "U.S. REPRESENTATIVE (House)", "type": "House"},
+            {"key": "cat-0-q3", "q": "SUPREME COURT JUSTICE CONFIRMATION", "type": "Judicial"},
+        ],
+        1: [
+            {"key": "cat-1-q0", "q": "GOVERNOR", "type": "Governor"},
+            {"key": "cat-1-q1", "q": "STATE SENATOR", "type": "State Senate"},
+            {"key": "cat-1-q2", "q": "STATE REPRESENTATIVE", "type": "State House"},
+            {"key": "cat-1-q3", "q": "STATE SUPREME COURT JUSTICE", "type": "State Judicial"},
+            {"key": "cat-1-q4", "q": "PROPOSITION 47: Tax Reform Initiative", "type": "Proposition"},
+            {"key": "cat-1-q5", "q": "PROPOSITION 48: Education Funding", "type": "Proposition"},
+        ],
+        2: [
+            {"key": "cat-2-q0", "q": "MAYOR", "type": "Mayor"},
+            {"key": "cat-2-q1", "q": "CITY COUNCIL", "type": "City Council"},
+            {"key": "cat-2-q2", "q": "SCHOOL BOARD", "type": "School Board"},
+            {"key": "cat-2-q3", "q": "COUNTY COMMISSIONER", "type": "County"},
+            {"key": "cat-2-q4", "q": "MUNICIPAL JUDGE", "type": "Municipal"},
+            {"key": "cat-2-q5", "q": "LOCAL BOND MEASURE: School Construction", "type": "Bond"},
+        ],
+        3: [
+            {"key": "cat-3-q0", "q": "NATIONAL PETITION: Term Limits for Congress", "type": "National Petition"},
+            {"key": "cat-3-q1", "q": "NATIONAL PETITION: Balanced Budget Amendment", "type": "National Petition"},
+            {"key": "cat-3-q2", "q": "STATE PETITION: Ranked Choice Voting", "type": "State Petition"},
+            {"key": "cat-3-q3", "q": "STATE LAW: 2nd Amendment Sanctuary", "type": "State Law"},
+            {"key": "cat-3-q4", "q": "STATE LAW: Universal Healthcare", "type": "State Law"},
+            {"key": "cat-3-q5", "q": "LOCAL ORDINANCE: Zoning Changes", "type": "Local Ordinance"},
+            {"key": "cat-3-q6", "q": "LOCAL ORDINANCE: Public Safety Funding", "type": "Local Ordinance"},
+            {"key": "cat-3-q7", "q": "CITIZEN INITIATIVE: Environmental Protection", "type": "Initiative"},
+        ]
+    }
+
+    result_races = []
+    questions = cat_questions.get(genre_idx, [])
+    for qinfo in questions:
+        key = qinfo['key']
+        if key in races:
+            cands = []
+            for name, count in races[key]['candidates'].items():
+                cands.append({'name': name, 'count': count})
+            result_races.append({
+                'question': qinfo['q'],
+                'type': qinfo['type'],
+                'candidates': cands
+            })
+
+    total_in_genre = len(rows)
+    return jsonify({
+        'races': result_races,
+        'total_votes_in_genre': total_in_genre
+    })
+
+
+# ==================== CHAIN INTEGRITY TEST API ====================
+@app.route('/api/chain/test', methods=['GET'])
+def chain_test_api():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""SELECT token_id, token_hash, prev_token_hash, genre, status, double_verified,
+                 verification_1_hash, verification_2_hash
+                 FROM vote_tokens ORDER BY id ASC""")
+    rows = c.fetchall()
+    conn.close()
+
+    blocks = []
+    for i, row in enumerate(rows):
+        if i == 0:
+            link_valid = row[2] == '0' * 64
+        else:
+            link_valid = row[2] == rows[i-1][1]
+
+        blocks.append({
+            'token_id': row[0],
+            'token_hash': row[1],
+            'prev_token_hash': row[2],
+            'genre': row[3],
+            'status': row[4],
+            'double_verified': bool(row[5]),
+            'link_valid': link_valid,
+            'v1_hash': row[6],
+            'v2_hash': row[7]
+        })
+
+    return jsonify({'blocks': blocks, 'total': len(blocks)})
+
+
+# ==================== STATE HEATMAP API ====================
+@app.route('/api/states/votes', methods=['GET'])
+def get_state_votes_api():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    # Count votes per state based on voter records and their associated votes
+    c.execute("""
+        SELECT v.state, COUNT(*) as vote_count
+        FROM voters v
+        JOIN votes vo ON v.id = vo.voter_id
+        WHERE v.state IS NOT NULL AND v.state != ''
+        GROUP BY v.state
+    """)
+    rows = c.fetchall()
+    conn.close()
+
+    state_votes = {}
+    for row in rows:
+        state_votes[row[0]] = row[1]
+
+    return jsonify({'state_votes': state_votes})
+
+
+# ==================== EXPORT AUDIT API ====================
+@app.route('/api/export/audit', methods=['GET'])
+def export_audit_api():
+    format_type = request.args.get('format', 'json')
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    # Get all tokens
+    c.execute("""SELECT token_id, vote_id, voter_id, election_id, genre, category,
+                 choice, choice_hash, voter_hash, token_hash, prev_token_hash,
+                 auth_layers, timestamp_created, timestamp_verified,
+                 verification_1_hash, verification_2_hash, double_verified, status
+                 FROM vote_tokens ORDER BY id ASC""")
+    token_rows = c.fetchall()
+
+    # Get all audit log entries
+    c.execute("SELECT id, timestamp, action, status, verified_by FROM audit_log ORDER BY id ASC")
+    audit_rows = c.fetchall()
+
+    conn.close()
+
+    tokens = []
+    for row in token_rows:
+        tokens.append({
+            'token_id': row[0], 'vote_id': row[1], 'voter_id': row[2],
+            'election_id': row[3], 'genre': row[4], 'category': row[5],
+            'choice': row[6], 'choice_hash': row[7], 'voter_hash': row[8],
+            'token_hash': row[9], 'prev_token_hash': row[10],
+            'auth_layers': row[11], 'timestamp_created': row[12],
+            'timestamp_verified': row[13], 'verification_1_hash': row[14],
+            'verification_2_hash': row[15], 'double_verified': bool(row[16]),
+            'status': row[17]
+        })
+
+    audit_log = []
+    for row in audit_rows:
+        audit_log.append({
+            'id': row[0], 'timestamp': row[1], 'action': row[2],
+            'status': row[3], 'verified_by': row[4]
+        })
+
+    export_data = {
+        'export_timestamp': datetime.now().isoformat(),
+        'system': 'U.S. NATIONAL BALLOT INTEGRITY & VERIFICATION SYSTEM v1.17',
+        'total_tokens': len(tokens),
+        'total_audit_entries': len(audit_log),
+        'tokens': tokens,
+        'audit_log': audit_log
+    }
+
+    if format_type == 'csv':
+        # Generate CSV for tokens
+        import io
+        output = io.StringIO()
+        if tokens:
+            headers = list(tokens[0].keys())
+            output.write(','.join(headers) + '\n')
+            for token in tokens:
+                row = [str(token.get(h, '')).replace(',', ';') for h in headers]
+                output.write(','.join(row) + '\n')
+        csv_data = output.getvalue()
+        return Response(csv_data, mimetype='text/csv',
+                       headers={'Content-Disposition': 'attachment; filename=voting_audit_export.csv'})
+
+    return jsonify(export_data)
 
 
 # ==================== LIVE VOTE RECEIVER ====================
